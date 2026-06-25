@@ -583,6 +583,26 @@ class ChartGenerator:
                 seen[chart_type] = pos
         return [t for t, _ in sorted(seen.items(), key=lambda x: x[1])]
 
+    @staticmethod
+    def _count_chart_dimensions(query: str, col_dt_list: list) -> int:
+        """
+        Count how many distinct dataset columns are referenced in the query
+        joined by 'and' / 'or' / commas alongside a chart type request.
+        Returns the count so callers can decide whether to treat the query
+        as multi-dimension (more than one chart needed) vs single-chart.
+
+        Only considers actual column names (case-insensitive) so generic
+        words like 'and' in natural language don't falsely inflate the count.
+        """
+        if not col_dt_list:
+            return 0
+        q_lower = query.lower()
+        matched = sum(
+            1 for col, _ in col_dt_list
+            if col.lower() in q_lower
+        )
+        return matched
+
     def _query_mode(self, query: str) -> str:
         types    = self._detect_requested_chart_types(query)
         quantity = self._extract_quantity(query)
@@ -593,7 +613,26 @@ class ChartGenerator:
             if self._query_matches(query, self._SCORECARD_EXPLICIT):  return "scorecards_only"
             return "exploratory"
         if quantity == -1:                    return "all_of_type"
-        if len(types) == 1 and quantity == 1: return "specific"
+        if len(types) == 1 and quantity == 1:
+            # Treat as "multi" when the user names multiple columns joined by
+            # "and"/"or"/comma alongside a single chart type — e.g.
+            # "pie chart for countries and continent".
+            # We detect this by counting column-name matches AND by checking
+            # whether the query contains " and " / " or " / "," between
+            # a column-like word pattern (generic heuristic, no hardcoding).
+            dim_count = self._count_chart_dimensions(query, self._col_dt_list)
+            if dim_count >= 2:
+                return "multi"
+            # Generic heuristic: "pie chart for X and Y" where X/Y may not
+            # exactly match column names (e.g. partial words / aliases).
+            # Look for connector words between two non-chart noun phrases.
+            _connector_re = re.compile(
+                r'\b(?:for|of|by|on)\b.+\b(?:and|or)\b.+',
+                re.IGNORECASE,
+            )
+            if _connector_re.search(query):
+                return "multi"
+            return "specific"
         return "multi"
 
     def _should_show_scorecards(self, query: str) -> bool:
@@ -651,6 +690,15 @@ class ChartGenerator:
         if mode == "multi":
             if quantity > 1 and len(types) == 1:
                 return query + f"\n\n[CHART INSTRUCTION]\nReturn exactly {quantity} {types[0]} charts using different columns."
+            if len(types) == 1:
+                # Single chart type but multiple dimensions/columns requested
+                # (e.g. "pie chart for countries and continent").
+                # Instruct the LLM to produce one chart per dimension mentioned.
+                return query + (
+                    f"\n\n[CHART INSTRUCTION]\nThe user wants a {types[0]} chart for EACH "
+                    f"dimension/column mentioned in the query. Return one separate "
+                    f"{types[0]} chart per dimension — do NOT merge them into a single chart."
+                )
             return query + f"\n\n[CHART INSTRUCTION]\nReturn one chart of each type: {', '.join(types)}."
 
         if mode == "all_of_type":
@@ -1133,21 +1181,31 @@ class ChartGenerator:
             if not plan.show_tables:     llm_schema.tables = []
  
         elif mode == "multi":
-            if quantity > 1 and len(requested_types) == 1:
+            if len(requested_types) == 1:
+                # Only one chart type was requested, but the query implies
+                # multiple charts of that type — either via an explicit
+                # quantity ("3 pie charts") or via multiple named dimensions
+                # ("pie chart for countries and continent"). Either way there
+                # is only one type to consider, so keep EVERY chart of that
+                # type the LLM returned. (Deduping by type, as the multi-type
+                # branch below does, would wrongly collapse these down to a
+                # single chart since they all share the same `type`.)
                 target = requested_types[0]
                 kept   = [c for c in llm_schema.charts if c.type == target]
-                while len(kept) < quantity:
-                    extra = self._fallback_chart_config_for_index(
-                        target, len(kept), working_data, num_cols=_num_cols_cache
-                    )
-                    if extra is None:
-                        break
-                    from app.schemas.chart_schema import ChartConfigSchema
-                    try:
-                        kept.append(ChartConfigSchema.model_validate(extra))
-                    except Exception:
-                        break
-                llm_schema.charts = kept[:quantity]
+                if quantity > 1:
+                    while len(kept) < quantity:
+                        extra = self._fallback_chart_config_for_index(
+                            target, len(kept), working_data, num_cols=_num_cols_cache
+                        )
+                        if extra is None:
+                            break
+                        from app.schemas.chart_schema import ChartConfigSchema
+                        try:
+                            kept.append(ChartConfigSchema.model_validate(extra))
+                        except Exception:
+                            break
+                    kept = kept[:quantity]
+                llm_schema.charts = kept
             else:
                 kept, covered = [], set()
                 for chart in llm_schema.charts:

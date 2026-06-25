@@ -156,6 +156,46 @@ CRITICAL — pandas 2.0+ value_counts() rule:
 
 
 # ─────────────────────────────────────────────
+# EXCEL FUNCTION → PANDAS TRANSLATION RULES  [NEW]
+# Lets the chatbot understand Excel-style formula requests
+# (VLOOKUP/HLOOKUP/XLOOKUP, SUM, AVERAGE, COUNT, COUNTA, MIN, MAX,
+# MEDIAN, MODE) and translate them into correct pandas code.
+# ─────────────────────────────────────────────
+
+_EXCEL_FUNCTION_RULES = """\
+EXCEL-STYLE FUNCTION REQUESTS — translate these into pandas exactly as shown:
+
+Aggregation functions:
+  SUM(col)      -> df['col'].sum()
+  AVERAGE(col)  -> df['col'].mean()
+  COUNT(col)    -> df['col'].count()                 # counts numeric/non-null entries
+  COUNTA(col)   -> df['col'].notna().sum()            # counts all non-empty values
+  MIN(col)      -> df['col'].min()
+  MAX(col)      -> df['col'].max()
+  MEDIAN(col)   -> df['col'].median()
+  MODE(col)     -> df['col'].mode().iloc[0]            # most frequent value
+
+Lookup functions — VLOOKUP/HLOOKUP/XLOOKUP all mean "find a value in one column/row
+by matching a key", which in pandas is a merge or a map:
+  VLOOKUP(lookup_value, table, return_col)
+      -> result = df.loc[df['lookup_col'] == lookup_value, 'return_col']
+      -> for matching one dataframe against another (classic VLOOKUP):
+         result = left_df.merge(right_df[['key_col', 'return_col']], on='key_col', how='left')
+  HLOOKUP -> same as VLOOKUP but the lookup table is organized by row instead of column;
+      in pandas this is still a merge/map on the matching key — there is no row/column
+      distinction once the data is in a DataFrame.
+  XLOOKUP -> same as VLOOKUP, but use it whenever the user just wants "the value of X
+      that corresponds to Y" without specifying direction; a simple `.merge()` or
+      `df.set_index('key_col')['return_col'].reindex(values)` works.
+  If the user asks for "vlookup/hlookup/xlookup of the first N entries of <col>" without
+  specifying a separate lookup table, interpret it as: return the first N values of
+  <col> alongside their natural row key (e.g. an ID/index column if one exists), as a
+  flat DataFrame with reset_index — this mirrors how VLOOKUP would be used to pull
+  a column of values next to their keys.
+"""
+
+
+# ─────────────────────────────────────────────
 # SAFE EXEC  (unchanged)
 # ─────────────────────────────────────────────
 
@@ -408,6 +448,9 @@ _DATA_SIGNALS = {
     "sales", "profit", "orders", "customers", "products",
     "filter", "where", "group by", "pivot", "chart", "graph", "table",
     "increase", "decrease", "over time", "per", "across",
+    # Excel-style aggregation / lookup function requests against the dataset
+    "vlookup", "hlookup", "xlookup", "lookup",
+    "counta", "median", "mode",
 }
 
 
@@ -472,6 +515,11 @@ ON-TOPIC examples (allow these):
 - "which product has the highest profit margin?"
 - "how has customer count changed over the year?"
 - "is there a correlation between discount and sales?"
+- "give vlookup for customer name" / "do an xlookup for order id" / "hlookup the price"
+- "sum/average/count/counta/min/max/median/mode of a column"
+- Excel-style formula requests (VLOOKUP, HLOOKUP, XLOOKUP, SUM, AVERAGE, COUNT, COUNTA,
+  MIN, MAX, MEDIAN, MODE) applied to the uploaded dataset — the user wants the equivalent
+  computation run on their data, not an Excel tutorial.
 - Any question that can be answered by querying or analyzing the uploaded dataset,
   even if phrased casually or without using column names.
 
@@ -1412,6 +1460,8 @@ Stats:
 {stats}
 
 {_PANDAS_COMPAT_RULES}
+
+{_EXCEL_FUNCTION_RULES}
 
 Write pandas code to answer the current query.
 Use the conversation history only to resolve references like "it", "that column", "the same period".
