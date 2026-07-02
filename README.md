@@ -2,9 +2,9 @@
 
 ## Overview
 
-An AI-driven analytics backend built with FastAPI, Pandas, and OpenAI that converts natural-language requests into charts, KPI scorecards, tables, and analytical insights.
+An AI-driven analytics backend developed during my internship, built with FastAPI, Pandas, and OpenAI that converts natural-language requests into charts, KPI scorecards, tables, and analytical insights.
 
-The platform enables users to explore datasets without writing SQL, Pandas code, or visualization logic manually.
+The platform enables users to explore datasets without writing SQL, Pandas code, or visualization logic manually. This project was developed as part of my software engineering internship, where I contributed to designing and implementing the AI-powered analytics pipeline.
 
 ### Key Features
 
